@@ -1,6 +1,0 @@
-applications:
-- name: ai-career-advisor
-  memory: 256M
-  instances: 1
-  buildpack: python_buildpack
-  command: python app.py
