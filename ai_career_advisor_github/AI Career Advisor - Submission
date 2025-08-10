@@ -1,0 +1,224 @@
+ This PDF contains the complete submission-ready project: code files, README, and setup instructions.
+ README
+ # AI Career Advisor (Submission-Ready)
+ ## Overview
+ A lightweight AI Career Advisor that uses IBM Granite (watsonx.ai) to generate career guidance from user-provided skills, education, and interests.
+ This package is ready for submission as a project deliverable.
+ ## Files included- granite_api.py  : IBM Granite wrapper (IAM token + generation)- app.py          : Flask web app (form + JSON API)- cli.py          : Command-line interface- requirements.txt: Python dependencies- .env.example    : Template environment variables- manifest.yml    : Cloud Foundry deployment manifest (optional)- README.md       : This document
+ ## How to run locally
+ 1. Create a folder and place all files inside.
+ 2. Create virtual environment and activate:
+   ```bash
+   python -m venv venv
+   # Windows
+   venv\Scripts\activate
+   # macOS/Linux
+   source venv/bin/activate
+   ```
+ 3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+ 4. Create `.env` from `.env.example` and fill IBM credentials:
+   ```
+   IBM_API_KEY=...
+   IBM_URL=https://eu-de.ml.cloud.ibm.com
+   GRANITE_MODEL_ID=ibm/granite-13b-chat-v2
+   IBM_PROJECT_ID=...   # optional if required
+   IBM_API_VERSION=2024-05-29
+   ```
+ 5. Run the web app:
+   ```bash
+   python app.py
+   ```
+   Open http://127.0.0.1:5000
+ ## API
+ POST /api/advise with JSON:
+ ```json
+ {
+ }
+  "name": "Ayesha",
+  "skills": "Python, SQL, Data analysis",
+  "education": "B.Sc Computer Science",
+  "interests": "Machine Learning, MLOps",
+  "goal": "Find an entry-level ML job in 3 months"
+ ```
+ ## Notes- Ensure network access and valid IBM credentials.- For deployment, set environment variables in IBM Cloud or use the manifest.yml.
+ granite_api.py
+ # granite_api.py
+ """
+ granite_api.py
+ Responsible for authenticating with IBM IAM and calling the watsonx.ai / Granite text-generation endpoint.
+ Requires environment variables (see .env.example).
+ """
+ import os
+import requests
+ from dotenv import load_dotenv
+ load_dotenv()
+ API_KEY = os.getenv("IBM_API_KEY")
+ BASE_URL = os.getenv("IBM_URL")  # e.g., https://eu-de.ml.cloud.ibm.com
+ MODEL_ID = os.getenv("GRANITE_MODEL_ID", "ibm/granite-13b-chat-v2")
+ PROJECT_ID = os.getenv("IBM_PROJECT_ID", None)  # optional, required in some accounts
+ VERSION = os.getenv("IBM_API_VERSION", "2024-05-29")  # API version date
+ if not API_KEY or not BASE_URL:
+    raise RuntimeError("Please set IBM_API_KEY and IBM_URL in your environment or .env file.")
+ def get_iam_token():
+    """Obtain IAM access token using API key."""
+    iam_url = "https://iam.cloud.ibm.com/identity/token"
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    data = {
+        "apikey": API_KEY,
+        "grant_type": "urn:ibm:params:oauth:grant-type:apikey"
+    }
+    resp = requests.post(iam_url, headers=headers, data=data, timeout=20)
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+ def call_granite(prompt: str, max_tokens: int = 300, timeout: int = 60):
+    """
+    Call the Granite / watsonx-ai text-generation endpoint.
+    Returns the generated text (string).
+    """
+    token = get_iam_token()
+    url = f"{BASE_URL}/ml/v1/text/generation?version={VERSION}"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}"
+    }
+    payload = {
+        "model_id": MODEL_ID,
+        "input": prompt,
+        "parameters": {"max_new_tokens": max_tokens}
+    }
+    # include project_id if available (some instances require it)
+    if PROJECT_ID:
+        payload["project_id"] = PROJECT_ID
+    resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    # raise helpful exceptions
+    if resp.status_code != 200:
+        raise RuntimeError(f"Granite API Error {resp.status_code}: {resp.text}")
+    data = resp.json()
+    # typical shape: {"results":[{"generated_text":"..."}], ...}
+    if "results" in data and isinstance(data["results"], list) and data["results"]:
+        return data["results"][0].get("generated_text") or str(data)
+    # fallback
+    return str(data)
+ app.py
+ # app.py
+ from flask import Flask, request, render_template_string, jsonify
+ from granite_api import call_granite
+ import os
+ app = Flask(__name__)
+ HTML_FORM = """
+ <!doctype html>
+ <title>AI Career Advisor</title>
+ <h2>AI Career Advisor</h2>
+ <form method="post" action="/advise">
+  <label>Full name (optional):</label><br>
+  <input type="text" name="name" placeholder="Your name"><br><br>
+  <label>Skills (comma separated):</label><br>
+  <input type="text" name="skills" placeholder="Python, SQL, ML"><br><br>
+  <label>Education / Level:</label><br>
+  <input type="text" name="education" placeholder="B.Sc Computer Science"><br><br>
+  <label>Interests / Job preferences:</label><br>
+  <input type="text" name="interests" placeholder="AI, Cloud, Backend"><br><br>
+  <label>Goal / timeline (optional):</label><br>
+  <input type="text" name="goal" placeholder="Get a job in 3 months"><br><br>
+  <button type="submit">Get Career Advice</button>
+ </form>
+ <hr>
+ <p>Or use the API endpoint <code>/api/advise</code> with JSON.</p>
+ """
+ def build_prompt(name, skills, education, interests, goal):
+    user_desc = (
+        f"Name: {name}\n" if name else ""
+    ) + f"Skills: {skills}\nEducation: {education}\nInterests: {interests}\nGoal: {goal}\n"
+    instructions = (
+        "You are an expert career counselor. Based on the user's details, produce:\n"
+        "1) Three recommended job roles suitable for the user (title + 1-line why).\n"
+        "2) A 3-step learning roadmap for each recommended role with resources (courses/books/blogs).\n"
+        "3) A short practical action plan for next 30 days (3 bullet points).\n"
+        "Keep answers concise and formatted with headings and bullet points.\n"
+    )
+    prompt = f"{instructions}\nUser details:\n{user_desc}\nProvide the response in plain text."
+    return prompt
+ @app.route("/", methods=["GET"])
+ def index():
+    return render_template_string(HTML_FORM)
+ @app.route("/advise", methods=["POST"])
+ def advise_form():
+    name = request.form.get("name", "").strip()
+    skills = request.form.get("skills", "").strip()
+    education = request.form.get("education", "Not specified").strip()
+    interests = request.form.get("interests", "").strip()
+    goal = request.form.get("goal", "Not specified").strip()
+    prompt = build_prompt(name, skills or "Not specified", education, interests or "Not specified", goal)
+    try:
+        gen = call_granite(prompt, max_tokens=600)
+    except Exception as e:
+        return f"<h3>Error calling Granite API:</h3><pre>{e}</pre>", 500
+    return f"<h2>AI Career Advice</h2><pre style='white-space:pre-wrap'>{gen}</pre><p><a href='/'>Back</a></p>"
+ # JSON API for programmatic use
+ @app.route("/api/advise", methods=["POST"])
+ def api_advise():
+    data = request.json or {}
+    name = data.get("name","")
+    skills = data.get("skills","")
+    education = data.get("education","Not specified")
+    interests = data.get("interests","")
+    goal = data.get("goal","Not specified")
+    prompt = build_prompt(name, skills or "Not specified", education, interests or "Not specified", goal)
+    try:
+        gen = call_granite(prompt, max_tokens=600)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"advice": gen})
+ @app.route("/health", methods=["GET"])
+ def health():
+    return "ok", 200
+ if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
+ cli.py
+ # cli.py
+ import argparse
+ from granite_api import call_granite
+ from app import build_prompt
+def main():
+    parser = argparse.ArgumentParser(description="AI Career Advisor CLI")
+    parser.add_argument("--name", default="")
+    parser.add_argument("--skills", required=True, help="Comma separated skills")
+    parser.add_argument("--education", default="Not specified")
+    parser.add_argument("--interests", default="")
+    parser.add_argument("--goal", default="Not specified")
+    args = parser.parse_args()
+    prompt = build_prompt(args.name, args.skills, args.education, args.interests, args.goal)
+    print("Sending prompt to Granite (this may take a few seconds)...")
+    resp = call_granite(prompt, max_tokens=600)
+    print("\n=== AI Career Advice ===\n")
+    print(resp)
+ if __name__ == "__main__":
+    main()
+ requirements.txt
+ flask
+ requests
+ python-dotenv
+ reportlab
+ .env.example
+ # Copy to .env and fill values
+ IBM_API_KEY=YOUR_IBM_CLOUD_API_KEY
+ IBM_URL=https://eu-de.ml.cloud.ibm.com
+ GRANITE_MODEL_ID=ibm/granite-13b-chat-v2
+ IBM_PROJECT_ID=        # optional: watsonx.ai project id if required
+ IBM_API_VERSION=2024-05-29
+ manifest.yml
+ applications:
+  - name: ai-career-advisor
+    memory: 256M
+    instances: 1
+    path: .
+    buildpack: python_buildpack
+    env:
+      IBM_API_KEY: ${IBM_API_KEY}
+      IBM_URL: ${IBM_URL}
+      GRANITE_MODEL_ID: ${GRANITE_MODEL_ID}
+      IBM_PROJECT_ID: ${IBM_PROJECT_ID}
