@@ -1,0 +1,12 @@
+applications:
+  - name: ai-career-advisor
+    memory: 256M
+    instances: 1
+    path: .
+    buildpack: python_buildpack
+    env:
+      IBM_API_KEY: DjHOMn3nc_kJOi3lbhwWH1k8FEiaS12G5YGj1tbl1MNz
+      IBM_URL: https://eu-de.ml.cloud.ibm.com
+      GRANITE_MODEL_ID: ibm/granite-13b-chat-v2
+      IBM_PROJECT_ID: 4973d336-7255-4e2d-8d8e-eca4b944e621
+      IBM_API_VERSION: 2024-05-29
